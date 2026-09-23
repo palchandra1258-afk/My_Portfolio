@@ -1,0 +1,441 @@
+// Prisma schema — Phase 7A database foundation.
+//
+// This schema is a faithful translation of the approved design in
+// docs/DATABASE_DESIGN.md into Prisma's schema language. It does not
+// introduce any table, column, or constraint that isn't traceable to that
+// document (section numbers are cited inline below).
+//
+// This schema is NOT yet used by the application. lib/repositories/* still
+// reads content/projects.ts and content/resume-data.ts exclusively. See the
+// "Database foundation" section in README.md for how this is meant to be
+// used later.
+//
+// Requires driver adapters (Prisma 7): the datasource intentionally has no
+// inline `url` — the connection string is supplied at runtime via
+// @prisma/adapter-pg (see lib/db.ts) and, for CLI operations, via
+// prisma7.config.ts. Learn more: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Controlled vocabularies (DATABASE_DESIGN.md §7, §26 Open Decision 2)
+//
+// Mirrors the TypeScript unions in lib/types.ts exactly, including the two
+// values VerificationStatus reserves but no project currently uses
+// (in_development, planned) — kept per Open Decision 3 for migration safety.
+// ---------------------------------------------------------------------------
+
+enum ProjectCategory {
+  featured
+  supporting
+  research
+  coming_soon @map("coming-soon")
+
+  @@map("project_category")
+}
+
+enum ProjectStatus {
+  Completed
+  ActiveDevelopment     @map("Active Development")
+  InternshipProject     @map("Internship Project")
+  ResearchExperimental  @map("Research / Experimental")
+  RepositoryPlaceholder @map("Repository Placeholder")
+  Unpublished
+
+  @@map("project_status")
+}
+
+enum VerificationStatus {
+  verified
+  partially_verified @map("partially-verified")
+  self_reported      @map("self-reported")
+  unpublished
+  needs_information  @map("needs-information")
+  in_development     @map("in-development")
+  planned
+
+  @@map("verification_status")
+}
+
+enum MetricStatus {
+  verified_result    @map("verified-result")
+  target
+  scope
+  dataset_fact       @map("dataset-fact")
+  measured
+  derived
+  assumption
+  needs_verification @map("needs-verification")
+
+  @@map("metric_status")
+}
+
+enum ImplementationStatus {
+  implemented
+  experimental
+  specified
+  in_development @map("in-development")
+  planned
+  future
+
+  @@map("implementation_status")
+}
+
+enum ProjectSource {
+  Resume
+  GitHub
+  Both
+
+  @@map("project_source")
+}
+
+// Discriminator for the consolidated ordered-list table (§11).
+enum ContentListType {
+  results
+  what_is_working
+  what_is_in_development
+
+  @@map("content_list_type")
+}
+
+// Future draft/publish direction (§19) — not exercised by any application
+// code yet. Every row migrates as `published` when content migration
+// eventually happens, per the plan in §25.
+enum PublicationStatus {
+  draft
+  published
+  archived
+
+  @@map("publication_status")
+}
+
+// Preserves the resume-vs-GitHub-verified provenance distinction from
+// content/resume-data.ts (§12 "skills").
+enum SkillSource {
+  resume
+  github
+
+  @@map("skill_source")
+}
+
+// ---------------------------------------------------------------------------
+// Project domain (DATABASE_DESIGN.md §6–11)
+// ---------------------------------------------------------------------------
+
+model Project {
+  id                Int                @id @default(autoincrement())
+  slug              String             @unique
+  title             String
+  shortDescription  String             @map("short_description")
+  problem           String?
+  approach          String?
+  architecture      String?
+  category          ProjectCategory
+  status            ProjectStatus
+  evidenceStatus    VerificationStatus @map("evidence_status")
+  verificationNotes String             @map("verification_notes")
+  featured          Boolean            @default(false)
+  source            ProjectSource
+  githubUrl         String?            @map("github_url")
+  demoUrl           String?            @map("demo_url")
+
+  // New field, not present in the TS model — required because CMS_SPECIFICATION.md
+  // §23 forbids relying on array/row insertion order (DATABASE_DESIGN.md §6).
+  displayOrder Int @map("display_order")
+
+  // Future draft/publish direction (§19, Option A: status lives on the entity).
+  // All rows migrate as `published`; nothing currently sets this to draft/archived.
+  publicationStatus PublicationStatus @default(published) @map("publication_status")
+  publishedAt       DateTime?         @map("published_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  alternateNames      ProjectAlternateName[]
+  metrics             ProjectMetric[]
+  implementationNotes ProjectImplementationNote[]
+  contentListItems    ProjectContentListItem[]
+  technologies        ProjectTechnology[]
+
+  // Self-referential relationships (§10) — deliberately asymmetric: a project
+  // can be the source of relationships it declares and, independently, the
+  // target of relationships other projects declare about it.
+  relationshipsAsSource ProjectRelationship[] @relation("ProjectRelationshipSource")
+  relationshipsAsTarget ProjectRelationship[] @relation("ProjectRelationshipTarget")
+
+  @@index([category, displayOrder])
+  @@index([featured, displayOrder])
+  @@index([status])
+  @@index([publicationStatus])
+  @@map("projects")
+}
+
+// 5 of 13 current projects populate this today, one value each (§6).
+model ProjectAlternateName {
+  id           Int    @id @default(autoincrement())
+  projectId    Int    @map("project_id")
+  name         String
+  displayOrder Int    @map("display_order")
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@map("project_alternate_names")
+}
+
+// Directly from the Metric interface (§8). `value` stays text — current
+// values include "94.50%", "< 2s", "15.49×", "253,680 records": free-form
+// strings with units baked in, not bare numerics.
+model ProjectMetric {
+  id           Int          @id @default(autoincrement())
+  projectId    Int          @map("project_id")
+  label        String
+  value        String
+  kind         MetricStatus
+  note         String?
+  source       String?
+  displayOrder Int          @map("display_order")
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@map("project_metrics")
+}
+
+// Directly from the ImplementationNote interface (§9). Only cortex-lab
+// populates this today (10 rows).
+model ProjectImplementationNote {
+  id           Int                  @id @default(autoincrement())
+  projectId    Int                  @map("project_id")
+  label        String
+  status       ImplementationStatus
+  displayOrder Int                  @map("display_order")
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@map("project_implementation_notes")
+}
+
+// Self-referential project relationships (§10), resolved to internal IDs —
+// this is the one place the database improves on the current TS model,
+// where a typo'd relatedTo.slug silently fails to resolve.
+//
+// CHECK (source_project_id <> related_project_id) IS enforced in the
+// database — but it is NOT visible in this file. Prisma 7.10.0 has no
+// schema-level CHECK support (verified: `@@check` is rejected by the parser
+// with P1012, and no preview feature enables it), so the constraint is
+// hand-added at the end of prisma/migrations/20260905021148_init/migration.sql
+// as "project_relationships_no_self_reference".
+// ⚠ Regenerating that migration from this schema will silently drop it.
+model ProjectRelationship {
+  id               Int    @id @default(autoincrement())
+  sourceProjectId  Int    @map("source_project_id")
+  relatedProjectId Int    @map("related_project_id")
+  note             String
+  displayOrder     Int    @map("display_order")
+
+  sourceProject  Project @relation("ProjectRelationshipSource", fields: [sourceProjectId], references: [id], onDelete: Cascade)
+  relatedProject Project @relation("ProjectRelationshipTarget", fields: [relatedProjectId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceProjectId, relatedProjectId])
+  @@index([relatedProjectId])
+  @@map("project_relationships")
+}
+
+// Consolidated, discriminated table for `results` / `whatIsWorking` /
+// `whatIsInDevelopment` (§11) — one table, not three, per the recommendation
+// in DATABASE_DESIGN.md §11 and Open Decision 4.
+model ProjectContentListItem {
+  id           Int             @id @default(autoincrement())
+  projectId    Int             @map("project_id")
+  listType     ContentListType @map("list_type")
+  body         String
+  displayOrder Int             @map("display_order")
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, listType])
+  @@map("project_content_list_items")
+}
+
+// Reusable technology lookup (§6) — the one project attribute worth a
+// many-to-many, per CMS_SPECIFICATION.md §18 (avoids Python/python/PYTHON
+// duplicates across projects).
+//
+// NOTE (limitation): `name` uniqueness is case-sensitive at the Prisma/DB
+// level as written. Case-insensitive enforcement (§26 Open Decision 9)
+// requires either a citext-equivalent type or a normalized shadow column —
+// deferred; application-layer normalization should compensate until then.
+model Technology {
+  id   Int    @id @default(autoincrement())
+  name String @unique
+
+  projects ProjectTechnology[]
+
+  @@map("technologies")
+}
+
+model ProjectTechnology {
+  projectId    Int @map("project_id")
+  technologyId Int @map("technology_id")
+  displayOrder Int @map("display_order")
+
+  project    Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  technology Technology @relation(fields: [technologyId], references: [id], onDelete: Restrict)
+
+  @@id([projectId, technologyId])
+  @@index([technologyId])
+  @@map("project_technologies")
+}
+
+// ---------------------------------------------------------------------------
+// Profile / resume domain (DATABASE_DESIGN.md §12)
+// ---------------------------------------------------------------------------
+
+// Singleton — there is exactly one portfolio owner (§12).
+//
+// Singleton enforcement IS active in the database, via the hand-added
+// "profile_singleton" CHECK (id = 1) at the end of
+// prisma/migrations/20260905021148_init/migration.sql (see the note on
+// ProjectRelationship above for why it cannot live in this file).
+// `id` is deliberately not autoincrementing: the single row is inserted with
+// id = 1. The CHECK makes a second row impossible; it does not force a row to
+// exist — the import process is what guarantees the row is present.
+// ⚠ Regenerating that migration from this schema will silently drop it.
+model Profile {
+  id          Int      @id
+  name        String
+  location    String
+  phone       String
+  email       String
+  githubUrl   String   @map("github_url")
+  linkedinUrl String   @map("linkedin_url")
+  summary     String
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  education              Education[]
+  experience             Experience[]
+  achievements           Achievement[]
+  skills                 Skill[]
+  financeAreas           FinanceArea[]
+  technologyFinanceAreas TechnologyFinanceArea[]
+
+  @@map("profile")
+}
+
+// `duration` stays free text ("2023 — Present", "2017 — 2023") rather than
+// start/end dates — splitting it would require inventing a convention for
+// "Present" that the source data doesn't express (§12, §26 Open Decision 8).
+model Education {
+  id           Int     @id @default(autoincrement())
+  profileId    Int     @map("profile_id")
+  institution  String
+  degree       String
+  duration     String
+  detail       String?
+  displayOrder Int     @map("display_order")
+
+  profile Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId])
+  @@map("education")
+}
+
+model Experience {
+  id           Int    @id @default(autoincrement())
+  profileId    Int    @map("profile_id")
+  title        String
+  organization String
+  duration     String
+  displayOrder Int    @map("display_order")
+
+  profile    Profile               @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  highlights ExperienceHighlight[]
+
+  @@index([profileId])
+  @@map("experience")
+}
+
+// `experience[].bullets` (§12) — a genuine one-to-many, matching
+// CMS_SPECIFICATION.md §27's `highlights` field.
+model ExperienceHighlight {
+  id           Int    @id @default(autoincrement())
+  experienceId Int    @map("experience_id")
+  body         String
+  displayOrder Int    @map("display_order")
+
+  experience Experience @relation(fields: [experienceId], references: [id], onDelete: Cascade)
+
+  @@index([experienceId])
+  @@map("experience_highlights")
+}
+
+// `detail` is preserved verbatim, including any inline "[NEEDS INFORMATION]"
+// marker text — not split into a structured evidence_status column, since
+// Achievement has no such field in the current type (§12).
+model Achievement {
+  id           Int    @id @default(autoincrement())
+  profileId    Int    @map("profile_id")
+  title        String
+  context      String
+  detail       String
+  displayOrder Int    @map("display_order")
+
+  profile Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId])
+  @@map("achievements")
+}
+
+// One table for both `skills` (Record<category, string[]>) and
+// `additionalVerifiedSkills` (string[]), distinguished by `source` rather
+// than duplicated into a second structurally-identical table (§12).
+// `category` is nullable — additionalVerifiedSkills entries have none.
+model Skill {
+  id           Int         @id @default(autoincrement())
+  profileId    Int         @map("profile_id")
+  category     String?
+  name         String
+  source       SkillSource
+  displayOrder Int         @map("display_order")
+
+  profile Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId])
+  @@map("skills")
+}
+
+model FinanceArea {
+  id           Int    @id @default(autoincrement())
+  profileId    Int    @map("profile_id")
+  title        String
+  description  String
+  displayOrder Int    @map("display_order")
+
+  profile Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId])
+  @@map("finance_areas")
+}
+
+// Deliberately not projects — matches the source comment in
+// content/resume-data.ts ("none of these exist as shipped work").
+model TechnologyFinanceArea {
+  id           Int    @id @default(autoincrement())
+  profileId    Int    @map("profile_id")
+  label        String
+  displayOrder Int    @map("display_order")
+
+  profile Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId])
+  @@map("technology_finance_areas")
+}
