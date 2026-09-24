@@ -6,7 +6,7 @@
 // Usage:
 //   npx tsx scripts/db/migrate-content.ts status
 //   npx tsx scripts/db/migrate-content.ts validate
-//   npx tsx scripts/db/migrate-content.ts import   [--only=slug,slug] [--no-profile] [--dry-run] [--allow-deletes]
+//   npx tsx scripts/db/migrate-content.ts import   [--only=slug,slug] [--no-profile] [--dry-run] [--allow-deletes] [--overwrite-cms]
 //   npx tsx scripts/db/migrate-content.ts compare  [--only=slug,slug] [--no-profile]
 //   npx tsx scripts/db/migrate-content.ts verify
 //   npx tsx scripts/db/migrate-content.ts idempotency --allow-deletes
@@ -29,7 +29,7 @@ import {
   formatComparisonReport,
   readRowCounts,
 } from "./compare";
-import { planImport, runImport, type ImportReport } from "./import";
+import { cmsOverwriteRefusal, planImport, runImport, type ImportReport } from "./import";
 import { normalize, type RowCountManifest } from "./normalize";
 import { formatValidationResult, validate } from "./validate";
 
@@ -48,11 +48,18 @@ interface Flags {
   includeProfile: boolean;
   dryRun: boolean;
   allowDeletes: boolean;
+  overwriteCms: boolean;
 }
 
 function parseArgs(argv: string[]): Flags {
   const [command = "help", ...rest] = argv;
-  const flags: Flags = { command, includeProfile: true, dryRun: false, allowDeletes: false };
+  const flags: Flags = {
+    command,
+    includeProfile: true,
+    dryRun: false,
+    allowDeletes: false,
+    overwriteCms: false,
+  };
   for (const arg of rest) {
     if (arg.startsWith("--only=")) {
       flags.only = arg
@@ -66,6 +73,8 @@ function parseArgs(argv: string[]): Flags {
       flags.dryRun = true;
     } else if (arg === "--allow-deletes") {
       flags.allowDeletes = true;
+    } else if (arg === "--overwrite-cms") {
+      flags.overwriteCms = true;
     } else {
       throw new Error(`Unrecognized argument: ${arg}`);
     }
@@ -100,6 +109,12 @@ function printImportReport(report: ImportReport): void {
   }
   if (report.prunedTechnologies.length > 0) {
     console.log(`  Pruned technologies (unreferenced): ${report.prunedTechnologies.join(", ")}`);
+  }
+  if (report.cmsAuthored.length > 0) {
+    console.log(
+      `\n  ⚠ CMS-edited projects in scope: ${report.cmsAuthored.join(", ")}` +
+        "\n    Importing over these discards the admin-UI edits.",
+    );
   }
   if (report.deferredRelationships.length > 0) {
     console.log("\n  Deferred relationships (target not imported yet):");
@@ -154,6 +169,7 @@ async function commandImport(flags: Flags): Promise<number> {
   const options = {
     projectSlugs: flags.only,
     includeProfile: flags.includeProfile,
+    overwriteCmsAuthored: flags.overwriteCms,
   };
 
   const plan = await planImport(await db(), data, options);
@@ -173,6 +189,11 @@ async function commandImport(flags: Flags): Promise<number> {
     );
     return 1;
   }
+  if (plan.cmsAuthored.length > 0 && !flags.overwriteCms) {
+    printImportReport(plan);
+    console.log(`\n  REFUSED: ${cmsOverwriteRefusal(plan.cmsAuthored)}`);
+    return 1;
+  }
   if (plan.prunedProjects.length > 0 && !flags.allowDeletes) {
     console.log(
       `\n  REFUSED: ${plan.prunedProjects.length} project row(s) in the database are no longer in` +
@@ -185,6 +206,23 @@ async function commandImport(flags: Flags): Promise<number> {
   const report = await runImport(await db(), data, options);
   printImportReport(report);
   return 0;
+}
+
+/**
+ * Print the CMS-authored projects a comparison stepped over.
+ *
+ * Silence here would be the dangerous option: a reader seeing "12/12 match"
+ * must also see that a thirteenth project exists which was deliberately not
+ * compared, or the check reads as broader than it is.
+ */
+function printCmsAuthored(slugs: string[]): void {
+  if (slugs.length === 0) return;
+  console.log(
+    `\n  ${slugs.length} project(s) excluded from the replica check because the CMS wrote them:` +
+      `\n    ${slugs.join(", ")}` +
+      "\n  These are expected to differ from content/*.ts — that is what editing them means." +
+      "\n  Row counts still include their rows, so a count above the manifest is normal here.",
+  );
 }
 
 async function commandCompare(flags: Flags): Promise<number> {
@@ -205,6 +243,7 @@ async function commandCompare(flags: Flags): Promise<number> {
   if (report.extraInDatabase.length > 0) {
     console.log(`  Unexpected: ${report.extraInDatabase.join(", ")}`);
   }
+  printCmsAuthored(report.cmsAuthored);
   console.log(`  Result: ${report.ok ? "IDENTICAL" : "DIFFERENCES FOUND"}`);
   return report.ok ? 0 : 1;
 }
@@ -231,6 +270,7 @@ async function commandVerify(): Promise<number> {
     `\n  Projects: ${comparison.projectsCompared}/${comparison.projectsExpected}` +
       `  ·  Profile: ${comparison.profile.every((c) => c.ok) ? "1/1" : "0/1"}`,
   );
+  printCmsAuthored(comparison.cmsAuthored);
 
   // The empty-array-vs-absent distinction is the one representational
   // difference the schema cannot carry. Printed in full so it is on record

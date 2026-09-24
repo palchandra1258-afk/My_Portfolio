@@ -69,6 +69,13 @@ export interface ImplementationNote {
   status: ImplementationStatus;
 }
 
+/**
+ * A project as authored and as the admin sees it — the full record, including
+ * the internal-only fields.
+ *
+ * Public pages must NOT use this type. They use `PublicProject` below, which
+ * omits `verificationNotes`. See lib/content/public-project.ts.
+ */
 export interface Project {
   slug: string;
   title: string;
@@ -86,6 +93,18 @@ export interface Project {
   githubUrl?: string;
   demoUrl?: string;
   evidenceStatus: VerificationStatus;
+  /**
+   * Internal editorial record of what was actually checked and what was not.
+   *
+   * **Admin-only. Never rendered publicly, in any form.** It is working
+   * material — it names what is unverified, which repositories were or were
+   * not located, and which claims are still the owner's word — and that is a
+   * note to the portfolio's author, not copy for a visitor.
+   *
+   * It is stored in PostgreSQL and editable in the admin project editor. The
+   * public read path cannot reach it: `PublicProject` omits it, and
+   * `toPublicProject()` strips it at runtime. See lib/content/public-project.ts.
+   */
   verificationNotes: string;
   whatIsWorking?: string[];
   whatIsInDevelopment?: string[];
@@ -94,3 +113,17 @@ export interface Project {
   relatedTo?: { slug: string; note: string }[];
   source: "Resume" | "GitHub" | "Both";
 }
+
+/**
+ * A project as the public site may see it.
+ *
+ * Structurally identical to `Project` minus `verificationNotes`. Public pages,
+ * public components, metadata, the sitemap and any future route handler take
+ * this type, which turns "did we remember to hide the notes?" from a review
+ * question into a compile error: the field does not exist to be rendered.
+ *
+ * The runtime half of the guarantee is `toPublicProject()` in
+ * lib/content/public-project.ts — a type alone would not stop the field being
+ * serialized into the RSC payload of a page that was handed a full `Project`.
+ */
+export type PublicProject = Omit<Project, "verificationNotes">;

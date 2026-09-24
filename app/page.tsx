@@ -7,7 +7,12 @@ import { ProjectCard } from "@/components/project-card";
 import { SectionHeading } from "@/components/section-heading";
 import { FinanceCard } from "@/components/finance-card";
 import { EducationTimeline } from "@/components/education-timeline";
-import { getFeaturedProjects, getProfile } from "@/lib/repositories/content-repository.server";
+import {
+  getFeaturedProjects,
+  getProfile,
+  getSiteMedia,
+} from "@/lib/repositories/content-repository.server";
+import { DEFAULT_DOWNLOAD_LABEL } from "@/lib/media/media-form";
 
 export const metadata: Metadata = {
   alternates: {
@@ -24,6 +29,7 @@ const PROOF_POINTS = [
 export default async function Home() {
   const { personal: profile, experience, financeAreas, skills, technologyXFinanceAreas } = await getProfile();
   const featured = await getFeaturedProjects();
+  const media = await getSiteMedia();
 
   return (
     <>
@@ -59,19 +65,24 @@ export default async function Home() {
                 >
                   View Projects <ArrowRight size={15} />
                 </Link>
-                <a
-                  href="/resume.pdf"
-                  download
-                  className="inline-flex items-center gap-2 rounded-full border border-foreground/20 px-5 py-2.5 text-sm font-medium transition-colors hover:border-accent hover:text-accent"
-                >
-                  Download Resume <Download size={15} />
-                </a>
+                {/* Only offered when a resume actually exists — a download
+                    link that 404s reads as a broken site. */}
+                {media.resume !== null && (
+                  <a
+                    href={media.resume.url}
+                    download={media.resume.filename}
+                    className="inline-flex items-center gap-2 rounded-full border border-foreground/20 px-5 py-2.5 text-sm font-medium transition-colors hover:border-accent hover:text-accent"
+                  >
+                    Download {media.resume.downloadLabel ?? DEFAULT_DOWNLOAD_LABEL}{" "}
+                    <Download size={15} />
+                  </a>
+                )}
               </div>
             </Reveal>
           </div>
 
           <Reveal delay={0.2}>
-            <Portrait />
+            <Portrait photo={media.photo} />
           </Reveal>
         </div>
 

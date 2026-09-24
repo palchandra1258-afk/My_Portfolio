@@ -32,9 +32,10 @@ import {
   getFeaturedProjects,
   getProject,
 } from "@/lib/repositories/project-repository.server";
-import type { Project } from "@/lib/types";
+import { toPublicProject } from "@/lib/content/public-project";
+import type { PublicProject } from "@/lib/types";
 
-let dbProjects: Project[];
+let dbProjects: PublicProject[];
 
 beforeAll(async () => {
   if (!process.env.DATABASE_URL) {
@@ -70,7 +71,7 @@ describe("getAllProjects", () => {
   it("matches the canonical TypeScript representation, project by project", () => {
     for (const [i, tsProject] of tsProjects.entries()) {
       const differences = diff(
-        canonicalProject(tsProject),
+        canonicalProject(toPublicProject(tsProject)),
         canonicalProject(dbProjects[i]),
         `project:${tsProject.slug}`,
       );
@@ -92,8 +93,8 @@ describe("getProject", () => {
       const dbProject = await getProject(tsProject.slug);
       expect(dbProject, `slug ${tsProject.slug} not found`).not.toBeNull();
       const differences = diff(
-        canonicalProject(tsProject),
-        canonicalProject(dbProject as Project),
+        canonicalProject(toPublicProject(tsProject)),
+        canonicalProject(dbProject as PublicProject),
         `project:${tsProject.slug}`,
       );
       expect(differences).toEqual([]);
@@ -105,7 +106,9 @@ describe("getProject", () => {
       const fromTs = tsGetProject(slug);
       const fromDb = await getProject(slug);
       expect(fromTs).toBeDefined();
-      expect(canonicalProject(fromDb as Project)).toEqual(canonicalProject(fromTs as Project));
+      expect(canonicalProject(fromDb as PublicProject)).toEqual(
+        canonicalProject(toPublicProject(fromTs!)),
+      );
     }
   });
 
@@ -132,7 +135,7 @@ describe("getFeaturedProjects", () => {
   it("reconstructs each featured project exactly", async () => {
     const dbFeatured = await getFeaturedProjects();
     for (const [i, tsProject] of tsFeaturedProjects.entries()) {
-      expect(diff(canonicalProject(tsProject), canonicalProject(dbFeatured[i]))).toEqual([]);
+      expect(diff(canonicalProject(toPublicProject(tsProject)), canonicalProject(dbFeatured[i]))).toEqual([]);
     }
   });
 });

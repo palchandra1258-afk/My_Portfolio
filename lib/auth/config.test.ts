@@ -40,6 +40,38 @@ describe("resolveAuthConfig", () => {
     );
   });
 
+  it("rejects a hash whose $ separators were eaten by .env expansion", () => {
+    // The real failure: Next.js expands `$NAME` in .env values, so an
+    // unescaped scrypt hash arrives as a short fragment. It must still be
+    // rejected — and the message must point at the escaping, not at a
+    // missing variable, because the variable was present and correct on disk.
+    expect(() => resolveAuthConfig({ ...VALID, ADMIN_PASSWORD_HASH: "scrypt=" })).toThrow(
+      AuthConfigError,
+    );
+    expect(() => resolveAuthConfig({ ...VALID, ADMIN_PASSWORD_HASH: "scrypt=" })).toThrow(
+      /escape every `\$` as/i,
+    );
+  });
+
+  it("still gives the plaintext-password advice for a value that is not a mangled hash", () => {
+    // The two causes must not be conflated: "hunter2" is not an escaping
+    // problem, and telling the operator to escape it would be wrong.
+    expect(() => resolveAuthConfig({ ...VALID, ADMIN_PASSWORD_HASH: "hunter2" })).not.toThrow(
+      /escape every/i,
+    );
+  });
+
+  it("names no secret value in any error message", () => {
+    // Messages are logged, and the login page tells the operator to read them.
+    const secretish = "scrypt=";
+    try {
+      resolveAuthConfig({ ...VALID, ADMIN_PASSWORD_HASH: secretish, AUTH_SECRET: "sh0rt-secret" });
+    } catch (error) {
+      expect((error as Error).message).not.toContain(VALID.AUTH_SECRET);
+      expect((error as Error).message).not.toContain(VALID.ADMIN_PASSWORD_HASH);
+    }
+  });
+
   it("rejects a missing AUTH_SECRET", () => {
     expect(() => resolveAuthConfig({ ...VALID, AUTH_SECRET: undefined })).toThrow(AuthConfigError);
   });

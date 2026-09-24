@@ -46,6 +46,10 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["lib/**/*.db.test.ts", "scripts/**/*.db.test.ts"],
+    // These tests open real interactive transactions and move real blobs; the
+    // 5s default is sized for an in-process unit test, not a round trip to
+    // PostgreSQL. Matches the ceiling vitest.config.ts already uses.
+    testTimeout: 30_000,
     env: {
       DATABASE_URL: process.env.DATABASE_URL ?? "",
     },

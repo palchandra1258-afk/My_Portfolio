@@ -33,6 +33,7 @@ import {
   STATUS_MAP,
 } from "@/lib/content/schema-maps";
 import type { PrismaClient } from "@/lib/generated/prisma/client";
+import type { PublicationStatus } from "@/lib/generated/prisma/enums";
 import type { Project } from "@/lib/types";
 
 // Inverse of the enum maps in lib/content/schema-maps.ts. Built by inversion
@@ -43,24 +44,65 @@ function invert<K extends string, V extends string>(map: Record<K, V>): Record<V
   return out;
 }
 
-const CATEGORY_FROM_DB = invert(CATEGORY_MAP);
-const STATUS_FROM_DB = invert(STATUS_MAP);
-const EVIDENCE_FROM_DB = invert(EVIDENCE_MAP);
+// Exported because the CMS write path needs the same translation when it
+// loads a row into the edit form. Prisma returns the client-side enum member
+// (`self_reported`, `coming_soon`, `ActiveDevelopment`), not the mapped
+// database spelling, so a plain cast to the TypeScript union silently
+// produces a value no <select> option matches.
+export const CATEGORY_FROM_DB = invert(CATEGORY_MAP);
+export const STATUS_FROM_DB = invert(STATUS_MAP);
+export const EVIDENCE_FROM_DB = invert(EVIDENCE_MAP);
 const METRIC_KIND_FROM_DB = invert(METRIC_KIND_MAP);
 const IMPLEMENTATION_STATUS_FROM_DB = invert(IMPLEMENTATION_STATUS_MAP);
 
-/**
 // ---------------------------------------------------------------------------
 // Database → TypeScript shape
 // ---------------------------------------------------------------------------
+
+export interface ReadProjectsOptions {
+  /**
+   * Restrict the read to one publication status.
+   *
+   * The public read path passes `"published"`, which is what keeps a draft
+   * invisible to visitors (CMS_SPECIFICATION.md §43: draft content must not
+   * automatically become public). Omitting it reads every row, which is what
+   * the admin list and the replica verifier need — both must see drafts.
+   *
+   * There is deliberately no default. A caller has to state which it wants,
+   * because defaulting either way is a silent bug: defaulting to "all" leaks
+   * drafts, and defaulting to "published" would make `db:verify` certify a
+   * replica while ignoring rows.
+   */
+  publicationStatus?: PublicationStatus;
+
+  /**
+   * Restrict the read to one project, by primary key.
+   *
+   * Used when taking a revision snapshot: the snapshot must be the exact same
+   * reconstruction the application and the replica verifier use, so it goes
+   * through this function rather than a second serializer that could drift
+   * from it. Reading all thirteen projects to snapshot one would be wasteful
+   * inside a write transaction.
+   */
+  projectId?: number;
+}
 
 /**
  * Rebuilds `Project` objects from the database, in `display_order` — which the
  * importer set from the position of each project in the source array, so the
  * order of this list must equal the order of content/projects.ts.
  */
-export async function readProjectsFromDatabase(prisma: PrismaClient): Promise<Project[]> {
+export async function readProjectsFromDatabase(
+  prisma: PrismaClient,
+  options: ReadProjectsOptions = {},
+): Promise<Project[]> {
   const rows = await prisma.project.findMany({
+    where: {
+      ...(options.publicationStatus === undefined
+        ? {}
+        : { publicationStatus: options.publicationStatus }),
+      ...(options.projectId === undefined ? {} : { id: options.projectId }),
+    },
     orderBy: { displayOrder: "asc" },
     include: {
       alternateNames: { orderBy: { displayOrder: "asc" } },

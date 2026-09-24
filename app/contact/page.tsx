@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Download, Mail, Phone } from "lucide-react";
 import { Reveal } from "@/components/reveal";
 import { GithubIcon, LinkedinIcon } from "@/components/brand-icons";
-import { getProfile } from "@/lib/repositories/content-repository.server";
+import { getProfile, getSiteMedia } from "@/lib/repositories/content-repository.server";
 
 export const metadata: Metadata = {
   title: "Contact",
@@ -17,6 +17,7 @@ export default async function ContactPage() {
   // construction runs at import time, which a repository that awaits a
   // database cannot satisfy. Values and order are unchanged.
   const { personal: profile } = await getProfile();
+  const media = await getSiteMedia();
 
   const CHANNELS = [
     { href: `mailto:${profile.email}`, label: "Email", value: profile.email, icon: Mail },
@@ -56,18 +57,22 @@ export default async function ContactPage() {
           </Reveal>
         ))}
 
-        <Reveal delay={0.2}>
-          <a
-            href="/resume.pdf"
-            download
-            className="flex items-center justify-between rounded-lg border border-accent/40 bg-accent/5 px-5 py-4 text-accent transition-colors hover:bg-accent/10"
-          >
-            <span className="flex items-center gap-3">
-              <Download size={18} />
-              <span className="text-sm font-medium">Download full résumé (PDF)</span>
-            </span>
-          </a>
-        </Reveal>
+        {/* Hidden entirely when no resume is stored, rather than offering a
+            download that leads to a 404. */}
+        {media.resume !== null && (
+          <Reveal delay={0.2}>
+            <a
+              href={media.resume.url}
+              download={media.resume.filename}
+              className="flex items-center justify-between rounded-lg border border-accent/40 bg-accent/5 px-5 py-4 text-accent transition-colors hover:bg-accent/10"
+            >
+              <span className="flex items-center gap-3">
+                <Download size={18} />
+                <span className="text-sm font-medium">Download full résumé (PDF)</span>
+              </span>
+            </a>
+          </Reveal>
+        )}
       </div>
     </div>
   );

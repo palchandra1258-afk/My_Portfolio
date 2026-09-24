@@ -47,6 +47,16 @@ export interface ComparisonReport {
   /** Projects compared / projects expected — the "13/13" figure. */
   projectsCompared: number;
   projectsExpected: number;
+  /**
+   * Slugs excluded from the comparison because the CMS wrote them.
+   *
+   * The replica check asks "does the database still match content/*.ts?". For
+   * a row the admin UI has edited the answer is *supposed* to be no, so
+   * comparing it would report a deliberate edit as corruption. These are
+   * listed instead, and a project created in the CMS — which has no
+   * counterpart in content/*.ts at all — is likewise not "unexpected".
+   */
+  cmsAuthored: string[];
   ok: boolean;
 }
 
@@ -60,9 +70,23 @@ export async function compareAll(
 ): Promise<ComparisonReport> {
   const includeProfile = options.includeProfile ?? true;
   const scoped = options.projectSlugs ? new Set(options.projectSlugs) : null;
-  const expected = scoped
+  const inScope = scoped
     ? sourceProjects.filter((p) => scoped.has(p.slug))
     : [...sourceProjects];
+
+  // Every row the CMS authored or edited. Read before anything else, because
+  // it decides what this comparison is even about.
+  const cmsRows = await prisma.project.findMany({
+    where: { contentOrigin: "cms" },
+    select: { slug: true },
+    orderBy: { slug: "asc" },
+  });
+  const cmsAuthored = new Set(cmsRows.map((row) => row.slug));
+
+  // Drop CMS-edited projects from the expected set rather than failing them:
+  // the figure should read "12/12 of the TypeScript-backed projects match",
+  // not "12/13 — one is broken".
+  const expected = inScope.filter((p) => !cmsAuthored.has(p.slug));
 
   const databaseProjects = await readProjectsFromDatabase(prisma);
   const databaseBySlug = new Map(databaseProjects.map((p) => [p.slug, p]));
@@ -74,6 +98,7 @@ export async function compareAll(
     extraInDatabase: [],
     projectsCompared: 0,
     projectsExpected: expected.length,
+    cmsAuthored: inScope.filter((p) => cmsAuthored.has(p.slug)).map((p) => p.slug),
     ok: true,
   };
 
@@ -105,13 +130,27 @@ export async function compareAll(
   // run only the scoped projects are expected, so this is checked against the
   // full source list rather than the scoped one.
   const sourceSlugs = new Set(sourceProjects.map((p) => p.slug));
-  report.extraInDatabase = databaseProjects.map((p) => p.slug).filter((s) => !sourceSlugs.has(s));
+  report.extraInDatabase = databaseProjects
+    .map((p) => p.slug)
+    // A project created in the CMS has no counterpart in content/*.ts by
+    // design; it is new content, not a stray row.
+    .filter((slug) => !sourceSlugs.has(slug) && !cmsAuthored.has(slug));
+  for (const slug of cmsAuthored) {
+    if (!sourceSlugs.has(slug) && !report.cmsAuthored.includes(slug)) {
+      report.cmsAuthored.push(slug);
+    }
+  }
 
   // Ordering is content, not incidental: display_order must reproduce the
   // source array order exactly (CMS_SPECIFICATION.md §23).
   if (!scoped) {
-    const sourceOrder = sourceProjects.map((p) => p.slug);
-    const databaseOrder = databaseProjects.map((p) => p.slug);
+    // Compared across the TypeScript-backed rows only. A CMS-created project
+    // sitting between two of them shifts display_order legitimately; what must
+    // still hold is that the TypeScript projects keep their relative order.
+    const sourceOrder = sourceProjects.filter((p) => !cmsAuthored.has(p.slug)).map((p) => p.slug);
+    const databaseOrder = databaseProjects
+      .filter((p) => !cmsAuthored.has(p.slug))
+      .map((p) => p.slug);
     if (sourceOrder.join("|") !== databaseOrder.join("|")) {
       report.projects.push({
         entity: "projects:order",

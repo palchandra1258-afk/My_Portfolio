@@ -65,6 +65,48 @@ afterEach(() => {
   vi.doUnmock(PROFILE_SERVER_MODULE);
 });
 
+describe("internal fields never leave the public repository", () => {
+  // Every public page, the sitemap and every metadata function read through
+  // this module, so it is the last place a leak could be caught. The
+  // TypeScript path is the one at risk of being overlooked: content/projects.ts
+  // carries verificationNotes just as the database does, and a projection
+  // applied only to the database path would leak on the default source.
+  it("strips verificationNotes from every project read in TypeScript mode", async () => {
+    setEnv({ CONTENT_SOURCE: "typescript" });
+    const repo = await freshContentRepository();
+
+    const all = await repo.getAllProjects();
+    const featured = await repo.getFeaturedProjects();
+    const one = await repo.getProject(tsProjects[0].slug);
+
+    expect(all.length).toBeGreaterThan(0);
+    for (const project of [...all, ...featured, one!]) {
+      expect("verificationNotes" in project, project.slug).toBe(false);
+    }
+  });
+
+  it("leaves no note text in the serialized output, which is what ships in the HTML", async () => {
+    setEnv({ CONTENT_SOURCE: "typescript" });
+    const repo = await freshContentRepository();
+
+    const serialized = JSON.stringify(await repo.getAllProjects());
+    expect(serialized).not.toContain("verificationNotes");
+    for (const source of tsProjects) {
+      const notes = source.verificationNotes.trim();
+      if (notes.length === 0) continue;
+      expect(serialized, `${source.slug} notes leaked`).not.toContain(notes.slice(0, 60));
+    }
+  });
+
+  it("still returns the public evidence status, which is not internal", async () => {
+    setEnv({ CONTENT_SOURCE: "typescript" });
+    const repo = await freshContentRepository();
+
+    const one = await repo.getProject(tsProjects[0].slug);
+    expect(one!.evidenceStatus).toBe(tsProjects[0].evidenceStatus);
+  });
+});
+
 describe("explicit typescript selection", () => {
   it("never touches the database modules and returns the TypeScript content unchanged", async () => {
     setEnv({ CONTENT_SOURCE: "typescript" });

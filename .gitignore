@@ -42,3 +42,12 @@ yarn-error.log*
 next-env.d.ts
 
 /lib/generated/prisma
+
+# Personal documents kept beside the project but not part of it.
+#
+# The resume the site actually serves is public/resume.pdf, which IS tracked
+# and IS meant to be public — it is the file behind the download link. This
+# root-level copy is byte-identical working material; it was untracked with
+# `git rm --cached` and is ignored here so a later `git add .` cannot quietly
+# re-add it. The file stays on disk.
+/Chandrapal_Resume.pdf

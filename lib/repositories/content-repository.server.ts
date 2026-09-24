@@ -42,6 +42,9 @@
 
 import "server-only";
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
 import { canonicalSourceProfile } from "@/lib/content/canonical";
 import {
   resolveContentSource,
@@ -53,12 +56,14 @@ import {
   ContentUnavailableError,
   isDatabaseUnavailable,
 } from "@/lib/content/database-availability";
+import { toPublicProject, toPublicProjects } from "@/lib/content/public-project";
 import { toProfileContent, type ProfileContent } from "@/lib/content/profile-content";
 import {
   featuredProjects as tsFeaturedProjects,
   projects as tsProjects,
 } from "@/lib/repositories/project-repository";
-import type { Project } from "@/lib/types";
+import type { PublicMediaAsset } from "@/lib/media/public-asset";
+import type { PublicProject } from "@/lib/types";
 
 /** True while `next build` is prerendering. Set by Next; verified present in this project's build. */
 function isStaticBuild(): boolean {
@@ -185,9 +190,12 @@ async function fromDatabase<T>(what: string, read: () => Promise<T>): Promise<T>
 // Projects
 // ---------------------------------------------------------------------------
 
-export async function getAllProjects(): Promise<Project[]> {
+export async function getAllProjects(): Promise<PublicProject[]> {
   const { source } = await getActiveSource();
-  if (source === "typescript") return [...tsProjects];
+  // Both sources are projected, not just the database one: content/projects.ts
+  // carries verificationNotes too, so an unprojected TypeScript path would
+  // leak exactly what the database path is careful not to.
+  if (source === "typescript") return toPublicProjects(tsProjects);
 
   const { getAllProjects: dbGetAllProjects } = await import(
     "@/lib/repositories/project-repository.server"
@@ -196,9 +204,12 @@ export async function getAllProjects(): Promise<Project[]> {
 }
 
 /** `null` for an unknown slug — Case C. Never falls back to the TypeScript entry. */
-export async function getProject(slug: string): Promise<Project | null> {
+export async function getProject(slug: string): Promise<PublicProject | null> {
   const { source } = await getActiveSource();
-  if (source === "typescript") return tsProjects.find((p) => p.slug === slug) ?? null;
+  if (source === "typescript") {
+    const found = tsProjects.find((p) => p.slug === slug);
+    return found === undefined ? null : toPublicProject(found);
+  }
 
   const { getProject: dbGetProject } = await import(
     "@/lib/repositories/project-repository.server"
@@ -206,9 +217,9 @@ export async function getProject(slug: string): Promise<Project | null> {
   return fromDatabase(`project "${slug}"`, () => dbGetProject(slug));
 }
 
-export async function getFeaturedProjects(): Promise<Project[]> {
+export async function getFeaturedProjects(): Promise<PublicProject[]> {
   const { source } = await getActiveSource();
-  if (source === "typescript") return [...tsFeaturedProjects];
+  if (source === "typescript") return toPublicProjects(tsFeaturedProjects);
 
   const { getFeaturedProjects: dbGetFeaturedProjects } = await import(
     "@/lib/repositories/project-repository.server"
@@ -241,3 +252,104 @@ export async function getProfile(): Promise<ProfileContent> {
 }
 
 export type { ProfileContent };
+
+// ---------------------------------------------------------------------------
+// Media (Phase 8)
+// ---------------------------------------------------------------------------
+
+/**
+ * Where the public site should point for the portrait and the resume.
+ *
+ * ── Why media goes through the same funnel ────────────────────────────────
+ * The managed assets live in PostgreSQL, because a form cannot edit a file in
+ * `public/`. But the whole point of this module is that a render never mixes
+ * sources: a page showing TypeScript project content alongside a
+ * database-managed portrait would be exactly the inconsistency the latch
+ * exists to prevent, and in a build that fell back to TypeScript it would mean
+ * reaching for a database that was just found to be unreachable.
+ *
+ * So media follows the active source like everything else:
+ *
+ *   typescript → the committed static files in `public/`, which is what the
+ *                site has always served. `null` when the file is absent, and
+ *                the caller renders its placeholder.
+ *   database   → the managed asset, or `null` when the slot is empty.
+ *
+ * The practical consequence is the same one the CMS already has, and the admin
+ * already says so on every screen: while `CONTENT_SOURCE=typescript`, an
+ * uploaded photo or resume is stored and durable and visible throughout the
+ * admin area, but visitors keep seeing the committed files until the site runs
+ * with `CONTENT_SOURCE=database`.
+ */
+export interface SiteMedia {
+  photo: PublicMediaAsset | null;
+  resume: PublicMediaAsset | null;
+}
+
+/**
+ * The static fallbacks, as shipped in `public/`.
+ *
+ * `existsSync` at read time rather than a hardcoded assumption: the repository
+ * contains a resume but no portrait, and a broken <Image> is worse than a
+ * designed placeholder. This is the behaviour components/portrait.tsx had
+ * before Phase 8, preserved exactly.
+ */
+function staticMedia(): SiteMedia {
+  const photoPath = join(process.cwd(), "public", "images", "profile.jpg");
+  const resumePath = join(process.cwd(), "public", "resume.pdf");
+
+  return {
+    photo: existsSync(photoPath)
+      ? {
+          url: "/images/profile.jpg",
+          mimeType: "image/jpeg",
+          filename: "profile.jpg",
+          // Unknown for a static file, and not worth reading the header for:
+          // the portrait frame is a fixed aspect ratio and uses `fill`.
+          width: null,
+          height: null,
+          altText: null,
+          caption: null,
+          title: null,
+          downloadLabel: null,
+        }
+      : null,
+    resume: existsSync(resumePath)
+      ? {
+          url: "/resume.pdf",
+          mimeType: "application/pdf",
+          filename: "resume.pdf",
+          width: null,
+          height: null,
+          altText: null,
+          caption: null,
+          title: null,
+          downloadLabel: null,
+        }
+      : null,
+  };
+}
+
+export async function getSiteMedia(): Promise<SiteMedia> {
+  const { source } = await getActiveSource();
+  if (source === "typescript") return staticMedia();
+
+  const { getMediaAsset, toPublicMediaAsset } = await import(
+    "@/lib/repositories/media-repository.server"
+  );
+
+  return fromDatabase("media", async () => {
+    const [photo, resume] = await Promise.all([
+      getMediaAsset("profile_photo"),
+      getMediaAsset("resume"),
+    ]);
+    // Projected, never returned raw: the row carries `updatedBy`, `byteSize`
+    // and timestamps that have no business in an RSC payload.
+    return {
+      photo: photo === null ? null : toPublicMediaAsset(photo),
+      resume: resume === null ? null : toPublicMediaAsset(resume),
+    };
+  });
+}
+
+export type { PublicMediaAsset };

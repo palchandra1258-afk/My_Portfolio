@@ -53,6 +53,16 @@ export interface ImportOptions {
    * without opening a write transaction.
    */
   dryRun?: boolean;
+  /**
+   * Permit overwriting rows the CMS has edited.
+   *
+   * Off by default, and the default is the whole point. Since Phase 7 the
+   * admin UI can write project rows, so an unguarded import — which rewrites
+   * every scalar and replaces every child collection wholesale — would
+   * silently destroy those edits and there would be no copy anywhere. The
+   * importer refuses instead, and names the projects it would have clobbered.
+   */
+  overwriteCmsAuthored?: boolean;
 }
 
 export interface ImportReport {
@@ -73,6 +83,11 @@ export interface ImportReport {
   prunedTechnologies: string[];
   /** Project rows removed because their slug no longer exists in content/projects.ts. */
   prunedProjects: string[];
+  /**
+   * In-scope slugs whose current contents came from the CMS, not from
+   * content/*.ts. Importing over these discards the CMS edit.
+   */
+  cmsAuthored: string[];
 }
 
 function emptyReport(scope: "full" | "partial", dryRun: boolean, slugs: string[]): ImportReport {
@@ -85,7 +100,41 @@ function emptyReport(scope: "full" | "partial", dryRun: boolean, slugs: string[]
     deferredRelationships: [],
     prunedTechnologies: [],
     prunedProjects: [],
+    cmsAuthored: [],
   };
+}
+
+/**
+ * The in-scope projects whose current contents came from the CMS.
+ *
+ * `db:import` rewrites every scalar and replaces every child collection, so
+ * running it over one of these throws the CMS edit away with nothing to
+ * recover it from. The importer refuses unless told otherwise; this is the
+ * query that decides.
+ */
+async function findCmsAuthored(
+  client: PrismaClient | Tx,
+  slugs: string[],
+): Promise<string[]> {
+  if (slugs.length === 0) return [];
+  const rows = await client.project.findMany({
+    where: { slug: { in: slugs }, contentOrigin: "cms" },
+    select: { slug: true },
+    orderBy: { slug: "asc" },
+  });
+  return rows.map((row) => row.slug);
+}
+
+/** Message shared by the plan and the write path, so both say the same thing. */
+export function cmsOverwriteRefusal(slugs: string[]): string {
+  return [
+    `Refusing to import over ${slugs.length} CMS-edited project(s): ${slugs.join(", ")}.`,
+    "  These rows were last written through the admin UI, not by content/*.ts.",
+    "  An import replaces every field and every child row, so the edits would be lost",
+    "  and there is no copy of them anywhere else.",
+    "  Either re-apply the change in content/*.ts first, or pass --overwrite-cms to",
+    "  discard the CMS version deliberately.",
+  ].join("\n");
 }
 
 function bump(counter: Record<string, number>, table: string, n: number): void {
@@ -112,6 +161,7 @@ export async function planImport(
     select: { id: true, slug: true },
   });
   const existingIds = existing.map((p) => p.id);
+  report.cmsAuthored = await findCmsAuthored(prisma, slugs);
 
   bump(report.deletions, "projects", 0); // upserted in place, never deleted
   bump(
@@ -230,6 +280,10 @@ async function importProjectRow(
     // `publishedAt` is deliberately left null — the source content carries no
     // publication date, and inventing one would fabricate data (CLAUDE.md §6).
     publicationStatus: "published" as const,
+    // This row's contents now come from content/*.ts again. Stamped on every
+    // import so that re-importing over a CMS row (with --overwrite-cms) also
+    // restores its provenance, rather than leaving it falsely marked `cms`.
+    contentOrigin: "typescript_import" as const,
   };
 
   const row = await tx.project.upsert({
@@ -444,6 +498,13 @@ export async function runImport(
 
   if (options.dryRun) {
     return planImport(prisma, data, options);
+  }
+
+  // Checked before the transaction opens, so a refusal costs nothing and
+  // cannot half-apply. See cmsOverwriteRefusal for why this is not a warning.
+  if (options.overwriteCmsAuthored !== true) {
+    const cmsAuthored = await findCmsAuthored(prisma, inScope.map((p) => p.slug));
+    if (cmsAuthored.length > 0) throw new Error(cmsOverwriteRefusal(cmsAuthored));
   }
 
   const report = emptyReport(scope, false, inScope.map((p) => p.slug));

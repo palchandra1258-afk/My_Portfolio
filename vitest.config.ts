@@ -38,7 +38,18 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["scripts/**/*.test.ts", "lib/**/*.test.ts"],
+    // The app/ route tests load real Next.js route modules through dynamic
+    // `import()`, which pulls in next, react and the component tree. That
+    // transform cost is paid inside the first test that imports each module,
+    // and under parallel workers on a cold cache it can exceed vitest's 5s
+    // default — producing timeouts that move between files from run to run
+    // while every file passes in isolation. The work is module loading, not
+    // anything the assertions are waiting on.
+    testTimeout: 30_000,
+    // app/ is included so the protected admin routes can be tested as what
+    // they are — async functions that guard, read and return an element tree.
+    // No DOM and no database are involved; see app/admin/admin-routes.test.ts.
+    include: ["scripts/**/*.test.ts", "lib/**/*.test.ts", "app/**/*.test.ts"],
     // `*.db.test.ts` files require a live PostgreSQL instance and run via
     // `npm run test:db` (vitest.db.config.ts). `npm test` must stay runnable
     // on a fresh clone with no database and no DATABASE_URL.

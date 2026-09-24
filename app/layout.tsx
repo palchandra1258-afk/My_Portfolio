@@ -3,7 +3,8 @@ import { Archivo, Fraunces, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
 import { Nav } from "@/components/nav";
 import { Footer } from "@/components/footer";
-import { getProfile } from "@/lib/repositories/content-repository.server";
+import { getProfile, getSiteMedia } from "@/lib/repositories/content-repository.server";
+import { DEFAULT_DOWNLOAD_LABEL } from "@/lib/media/media-form";
 
 const fraunces = Fraunces({
   variable: "--font-fraunces",
@@ -54,6 +55,19 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   // moving it here is what makes this layout substitutable later.
   const { personal: profile } = await getProfile();
 
+  // Resolved here rather than inside Nav: Nav is a Client Component, and the
+  // media repository must never reach the browser bundle. Same reason the
+  // profile's two links are passed down as strings.
+  const media = await getSiteMedia();
+  const resume =
+    media.resume === null
+      ? null
+      : {
+          url: media.resume.url,
+          filename: media.resume.filename,
+          label: media.resume.downloadLabel ?? DEFAULT_DOWNLOAD_LABEL,
+        };
+
   // Only fields already present in personal (content/resume-data.ts, via the
   // profile repository) are included — no jobTitle, since the source data has
   // no discrete job-title field, only descriptive prose.
@@ -81,7 +95,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         >
           Skip to content
         </a>
-        <Nav github={profile.github} linkedin={profile.linkedin} />
+        <Nav github={profile.github} linkedin={profile.linkedin} resume={resume} />
         <main id="main" className="flex-1">
           {children}
         </main>

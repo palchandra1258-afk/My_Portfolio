@@ -11,6 +11,8 @@
 // Resolution is pure: it takes an environment object and returns a result, so
 // every misconfiguration branch is testable without mutating process.env.
 
+import { looksLikeExpandedScryptHash } from "@/lib/auth/env-file";
+
 /** Minimum secret length. 32 chars of a random base64 string is ~192 bits. */
 export const MIN_AUTH_SECRET_LENGTH = 32;
 
@@ -57,8 +59,15 @@ export function resolveAuthConfig(env: AuthEnv): AdminAuthConfig {
     );
   }
   if (!adminPasswordHash.startsWith("scrypt$")) {
+    // Two very different mistakes produce a value that is not a scrypt hash,
+    // and they need different advice. Validation is identical either way —
+    // both are rejected — but the message names the actual cause.
     throw new AuthConfigError(
-      "ADMIN_PASSWORD_HASH is not a scrypt hash. It must be the full `scrypt$...` string from `npm run auth:hash`, not a plaintext password.",
+      looksLikeExpandedScryptHash(adminPasswordHash)
+        ? "ADMIN_PASSWORD_HASH lost its `$` separators. Next.js expands `$NAME` inside .env " +
+          "values, which collapses a scrypt hash. Escape every `$` as `\\$` in .env — quoting " +
+          "the value does NOT help. `npm run auth:hash` prints the correctly escaped line."
+        : "ADMIN_PASSWORD_HASH is not a scrypt hash. It must be the full `scrypt$...` string from `npm run auth:hash`, not a plaintext password.",
     );
   }
   if (!authSecret) {

@@ -116,6 +116,26 @@ enum PublicationStatus {
   @@map("publication_status")
 }
 
+// Which authoring path last wrote a project row — CMS_SPECIFICATION.md §63
+// (content provenance) and §60 ("the precedence must be explicit").
+//
+// Added in Phase 7, and it is a safety mechanism, not bookkeeping. Until now
+// PostgreSQL was a derived replica: `db:import` rewrote every row from
+// content/*.ts, and that was always safe because nothing else ever wrote to
+// the database. The moment the CMS can write, an unguarded `db:import` would
+// silently destroy every edit made through the admin UI.
+//
+// So each row records where its current contents came from. `db:import`
+// refuses to overwrite a `cms` row unless explicitly told to, and `db:verify`
+// excludes `cms` rows from the replica comparison instead of reporting them
+// as corruption — they are *supposed* to differ from the TypeScript files.
+enum ContentOrigin {
+  typescript_import @map("typescript-import")
+  cms
+
+  @@map("content_origin")
+}
+
 // Preserves the resume-vs-GitHub-verified provenance distinction from
 // content/resume-data.ts (§12 "skills").
 enum SkillSource {
@@ -154,6 +174,11 @@ model Project {
   // All rows migrate as `published`; nothing currently sets this to draft/archived.
   publicationStatus PublicationStatus @default(published) @map("publication_status")
   publishedAt       DateTime?         @map("published_at")
+
+  // Provenance (§63). Defaults to `typescript_import` so every existing row —
+  // all 13, all written by db:import — keeps its current meaning without a
+  // data backfill. Only the CMS sets `cms`. See the enum for why this matters.
+  contentOrigin ContentOrigin @default(typescript_import) @map("content_origin")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -438,4 +463,149 @@ model TechnologyFinanceArea {
 
   @@index([profileId])
   @@map("technology_finance_areas")
+}
+
+// ---------------------------------------------------------------------------
+// Content revisions (DATABASE_DESIGN.md §20; CMS_SPECIFICATION.md §47-49;
+// IMPLEMENTATION_ROADMAP.md Phase 10)
+// ---------------------------------------------------------------------------
+
+// Which kind of entity a snapshot belongs to. Only `project` exists today —
+// Phase 10 follows Phase 7 (Project CMS), not the profile CMS — but the column
+// is a vocabulary rather than a boolean so adding `profile` later is a value,
+// not a migration of every existing row.
+enum RevisionEntityType {
+  project
+
+  @@map("revision_entity_type")
+}
+
+// Administrative history. NEVER feeds the public read path (§20: "read by the
+// admin, never by app/projects/*"): no public route, metadata function or
+// sitemap reads this table.
+//
+// ── Polymorphic, deliberately ──────────────────────────────────────────────
+// `(entity_type, entity_id)` cannot carry a real foreign key — one FK cannot
+// point at "whichever table entity_type names" — and DATABASE_DESIGN.md §20
+// accepts that trade-off explicitly rather than multiplying one revisions
+// table per entity for a feature only `projects` needs now. The cost is real:
+// deleting a project does not cascade to its revisions. That is arguably the
+// desired behaviour for history, and §53 ("never destroy history silently")
+// points the same way, but it does mean orphaned rows are possible.
+//
+// ── Full snapshot, not a diff ──────────────────────────────────────────────
+// §20 again: a diff turns restore into a replay engine, while a snapshot makes
+// restore a straight copy. The snapshot holds the whole project including its
+// child collections and the admin-only verification notes.
+model ContentRevision {
+  id            Int                @id @default(autoincrement())
+  entityType    RevisionEntityType @map("entity_type")
+  entityId      Int                @map("entity_id")
+  // Monotonic per (entity_type, entity_id). The unique index below is what
+  // enforces it: two concurrent writers computing the same "next" number
+  // collide loudly instead of silently producing two version 4s.
+  versionNumber Int                @map("version_number")
+  snapshot      Json
+
+  // What state the snapshot represents, so history can be read without
+  // decoding the blob.
+  publicationStatusAtRevision PublicationStatus @map("publication_status_at_revision")
+
+  changeSummary String? @map("change_summary")
+
+  // §20 leaves this as a nullable placeholder for a future `users` table.
+  // Until that exists it holds the session subject of the administrator who
+  // made the change — real data, not a fabricated author.
+  createdBy String?  @map("created_by")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([entityType, entityId, versionNumber])
+  @@index([entityType, entityId, createdAt])
+  @@map("content_revisions")
+}
+
+// ---------------------------------------------------------------------------
+// Managed media — Phase 8 (Media & Documents)
+// ---------------------------------------------------------------------------
+
+/// Which managed asset a row is. DATABASE_DESIGN.md §5 anticipates a
+/// `media_assets` table; §575 says the polymorphic `media_references` join is
+/// only warranted "once an actual image field is added to a content model".
+/// There are exactly two named assets — the portrait and the resume — so the
+/// reference collapses into this controlled vocabulary instead. Adding a third
+/// asset is a new member here; a genuine open-ended media library is when
+/// `media_references` becomes worth its cost.
+enum MediaSlot {
+  profile_photo @map("profile-photo")
+  resume
+
+  @@map("media_slot")
+}
+
+/// One managed asset: its bytes and its metadata, in one row.
+///
+/// ── Why the bytes live here and not on disk ────────────────────────────────
+/// Next snapshots `public/` at build time and serverless filesystems are
+/// ephemeral, so a file written there at runtime is not reliably served and
+/// may vanish on the next deploy. Writing uploads into the application
+/// directory is therefore not production-safe (SECURITY_AND_QUALITY.md §38).
+///
+/// Keeping the bytes in the same row as the metadata buys three properties
+/// that a filesystem plus a database cannot have together:
+///
+///   - replace and delete are atomic. One transaction commits or rolls back
+///     both, so there is no window where the row points at a file that is not
+///     there, or a file lingers that nothing points at.
+///   - orphaned files are impossible. There is no second system to leak into.
+///   - path traversal is impossible. There are no paths.
+///
+/// The cost is that every byte travels through PostgreSQL and the Node
+/// runtime. For two singleton assets of a few megabytes that is a fair trade;
+/// for a real media library it would not be, and object storage would be the
+/// answer (see README).
+model MediaAsset {
+  id   Int       @id @default(autoincrement())
+  /// One row per slot, enforced by the unique index: "the profile photo" is a
+  /// single thing, and two rows claiming to be it is not a representable state.
+  slot MediaSlot @unique
+
+  /// The file itself. `Bytes` maps to PostgreSQL `bytea`.
+  data Bytes
+
+  /// Sniffed from the file's own magic bytes, never taken from the browser
+  /// (SECURITY_AND_QUALITY.md §33: "Never trust the browser-provided MIME
+  /// type alone").
+  mimeType String @map("mime_type")
+
+  /// A display name shown in the admin and used in Content-Disposition.
+  /// Sanitized on the way in; it is never used to build a storage location,
+  /// because there is no storage location to build.
+  filename String
+
+  /// Bytes. Denormalized from `data` so a listing does not have to read blobs.
+  byteSize Int @map("byte_size")
+
+  /// Images only; null for documents. Parsed from the file header.
+  width  Int?
+  height Int?
+
+  /// CMS_SPECIFICATION.md §36: alt text describes meaningful content and is
+  /// never derived from the filename. Null for a document, which has none.
+  altText String? @map("alt_text")
+
+  /// §33: optional caption for an image; for the resume this carries the
+  /// short description shown beside the download.
+  caption String?
+
+  /// The resume's public heading and button label. Null for the photo.
+  title         String?
+  downloadLabel String? @map("download_label")
+
+  /// Session subject of the administrator who last wrote this row. Same
+  /// placeholder-for-a-future-users-table role as ContentRevision.createdBy.
+  updatedBy String?  @map("updated_by")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("media_assets")
 }

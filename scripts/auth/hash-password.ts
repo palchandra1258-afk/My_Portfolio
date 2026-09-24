@@ -11,6 +11,7 @@
 
 import { createInterface } from "node:readline";
 
+import { dotenvLine } from "@/lib/auth/env-file";
 import { hashPassword } from "@/lib/auth/password";
 
 const MIN_LENGTH = 12;
@@ -84,8 +85,17 @@ async function main(): Promise<number> {
 
   const hash = await hashPassword(password);
 
-  console.log("\nAdd this line to .env (it is gitignored — never commit it):\n");
-  console.log(`ADMIN_PASSWORD_HASH="${hash}"`);
+  // Printed with every `$` escaped as `\$`. Next.js expands `$NAME` inside
+  // .env values, which silently collapses an unescaped scrypt hash into a
+  // handful of characters — and the only symptom is the admin login claiming
+  // it is "not configured". Quoting does not prevent it; escaping does.
+  // See lib/auth/env-file.ts.
+  console.log("\nAdd this line to .env exactly as printed (it is gitignored — never commit it):\n");
+  console.log(dotenvLine("ADMIN_PASSWORD_HASH", hash));
+  console.log(
+    "\nThe backslashes are required: Next.js would otherwise treat each `$` as a\n" +
+      "variable reference and strip the hash. Do not add quotes around it.",
+  );
   console.log(
     "\nAlso set ADMIN_EMAIL, and an AUTH_SECRET of at least 32 characters:\n" +
       "  node -e \"console.log(require('node:crypto').randomBytes(32).toString('base64url'))\"\n",

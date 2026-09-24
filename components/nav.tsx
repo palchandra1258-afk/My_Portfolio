@@ -26,9 +26,16 @@ const LINKS = [
 export type NavProps = {
   github: string;
   linkedin: string;
+  /**
+   * Where the resume lives, and what to call it — resolved by the server
+   * parent through the content funnel, for the same reason `github` and
+   * `linkedin` are. Null when no resume is available, and the link is then
+   * omitted rather than pointing at a 404.
+   */
+  resume: { url: string; filename: string; label: string } | null;
 };
 
-export function Nav({ github, linkedin }: NavProps) {
+export function Nav({ github, linkedin, resume }: NavProps) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
 
@@ -72,13 +79,21 @@ export function Nav({ github, linkedin }: NavProps) {
           >
             <LinkedinIcon size={18} />
           </a>
-          <a
-            href="/resume.pdf"
-            download
-            className="rounded-full border border-foreground/20 px-4 py-1.5 text-sm transition-colors hover:border-accent hover:text-accent"
-          >
-            Resume
-          </a>
+          {/* `!= null` on purpose, matching both null and undefined. The type
+              says the prop is always supplied, but this is a Client Component
+              reading props across a serialization boundary: during a dev hot
+              reload the layout and this file can briefly be at different
+              revisions, and `resume !== null` would then pass for `undefined`
+              and throw on `.url`. Observed in the dev log, not hypothetical. */}
+          {resume != null && (
+            <a
+              href={resume.url}
+              download={resume.filename}
+              className="rounded-full border border-foreground/20 px-4 py-1.5 text-sm transition-colors hover:border-accent hover:text-accent"
+            >
+              {resume.label}
+            </a>
+          )}
         </div>
 
         <button
@@ -110,9 +125,11 @@ export function Nav({ github, linkedin }: NavProps) {
             <a href={linkedin} target="_blank" rel="noopener noreferrer" aria-label="LinkedIn profile">
               <LinkedinIcon size={18} />
             </a>
-            <a href="/resume.pdf" download className="text-sm text-accent">
-              Download Resume
-            </a>
+            {resume != null && (
+              <a href={resume.url} download={resume.filename} className="text-sm text-accent">
+                Download {resume.label}
+              </a>
+            )}
           </div>
         </nav>
       )}

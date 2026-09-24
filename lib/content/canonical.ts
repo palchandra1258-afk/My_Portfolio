@@ -41,7 +41,7 @@ import {
   skills as sourceSkills,
   technologyXFinanceAreas as sourceTechFinanceAreas,
 } from "@/content/resume-data";
-import type { ImplementationNote, Metric, Project } from "@/lib/types";
+import type { ImplementationNote, Metric, Project, PublicProject } from "@/lib/types";
 
 /**
  * Plain JSON-shaped value. Used by `DatabaseProfile` below and by the
@@ -127,7 +127,17 @@ function canonicalImplementationNote(n: ImplementationNote): Canonical {
  * field made explicit. Used on the TypeScript source and on the
  * database-reconstructed object alike.
  */
-export function canonicalProject(p: Project): Canonical {
+/**
+ * Canonical form of a project.
+ *
+ * Accepts either the full `Project` or the `PublicProject` the public read
+ * path returns. `verificationNotes` is only present on the former, so it
+ * canonicalizes to `null` for a public projection. Both sides of any given
+ * comparison must therefore be the same kind: db:verify compares two full
+ * projects, and the public contract test compares two public ones. Mixing them
+ * would report the deliberate omission as a difference.
+ */
+export function canonicalProject(p: Project | PublicProject): Canonical {
   return {
     slug: p.slug,
     title: p.title,
@@ -146,7 +156,7 @@ export function canonicalProject(p: Project): Canonical {
     githubUrl: p.githubUrl ?? null,
     demoUrl: p.demoUrl ?? null,
     evidenceStatus: p.evidenceStatus,
-    verificationNotes: p.verificationNotes,
+    verificationNotes: "verificationNotes" in p ? p.verificationNotes : null,
     whatIsWorking: [...(p.whatIsWorking ?? [])],
     whatIsInDevelopment: [...(p.whatIsInDevelopment ?? [])],
     implementationNotes: (p.implementationNotes ?? []).map(canonicalImplementationNote),

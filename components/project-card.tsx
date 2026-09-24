@@ -1,9 +1,9 @@
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
-import type { Project } from "@/lib/types";
+import type { PublicProject } from "@/lib/types";
 import { StatusBadge } from "@/components/status-badge";
 
-export function ProjectCard({ project }: { project: Project }) {
+export function ProjectCard({ project }: { project: PublicProject }) {
   return (
     <Link
       href={`/projects/${project.slug}`}
