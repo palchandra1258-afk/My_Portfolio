@@ -23,9 +23,9 @@ import type { PublicMediaAsset } from "@/lib/media/public-asset";
  */
 export function Portrait({ photo }: { photo: PublicMediaAsset | null }) {
   return (
-    <div className="relative mx-auto w-full max-w-[260px] sm:max-w-[300px]">
-      <div aria-hidden="true" className="absolute -inset-3 border border-accent/25" />
-      <div className="relative aspect-[4/5] overflow-hidden border border-border bg-card">
+    <div className="relative mx-auto w-full max-w-[220px] sm:max-w-[260px] lg:max-w-[280px]">
+      <div aria-hidden="true" className="absolute -inset-3 rounded-full border border-accent/25" />
+      <div className="relative aspect-square overflow-hidden rounded-full border border-border bg-card">
         {photo !== null ? (
           <Image
             src={photo.url}
@@ -35,8 +35,8 @@ export function Portrait({ photo }: { photo: PublicMediaAsset | null }) {
             // used rather than inventing one from the file's name.
             alt={photo.altText ?? "Chandrapal — AI/ML Engineer and Data Science undergraduate"}
             fill
-            sizes="(min-width: 640px) 300px, 260px"
-            className="object-cover"
+            sizes="(min-width: 1024px) 280px, (min-width: 640px) 260px, 220px"
+            className="object-cover object-center"
             priority
             // A managed asset is served by a route handler that already returns
             // exactly the stored bytes. Sending it through the image optimizer

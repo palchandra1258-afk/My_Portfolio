@@ -50,11 +50,11 @@ export default async function Home() {
             </Reveal>
             <Reveal delay={0.16}>
               <p className="mt-6 max-w-xl text-lg leading-relaxed text-muted">
-                Data Science undergraduate at Vidyashilp University with a
-                Minor in Finance. I build applied AI/ML systems — most
-                recently a verified 15.49× model-compression result — while
-                developing a parallel foundation in financial markets,
-                corporate finance, and FinTech.
+                I&apos;m an AI/ML Engineer and Data Science undergraduate focused
+                on building practical intelligent systems. My work spans deep
+                learning, model compression, generative AI, and AI-powered
+                applications, with a strong interest in turning research ideas
+                into reliable real-world systems.
               </p>
             </Reveal>
             <Reveal delay={0.24}>
@@ -82,7 +82,17 @@ export default async function Home() {
           </div>
 
           <Reveal delay={0.2}>
-            <Portrait photo={media.photo} />
+            <div>
+              <Portrait photo={media.photo} />
+              <div className="mt-7 text-center">
+                <p className="font-display text-lg leading-snug sm:text-xl">
+                  B.Tech (Hons) Computer Science and Engineering (Data Science)
+                </p>
+                <p className="mt-2 font-mono text-[11px] uppercase tracking-[0.16em] text-muted">
+                  UEN 20203UG000118
+                </p>
+              </div>
+            </div>
           </Reveal>
         </div>
 
