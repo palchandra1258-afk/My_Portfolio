@@ -43,8 +43,8 @@ export default async function Home() {
               </p>
             </Reveal>
             <Reveal delay={0.08}>
-              <h1 className="mt-6 font-display text-4xl leading-[1.1] tracking-tight sm:text-6xl">
-                AI/ML Engineer building applied systems — from compressed
+              <h1 className="mt-6 font-display text-2xl leading-tight tracking-tight sm:text-4xl">
+                AI/ML Enthusiast building applied systems — from compressed
                 neural networks to agentic AI architectures.
               </h1>
             </Reveal>
@@ -116,10 +116,10 @@ export default async function Home() {
           eyebrow="Technology"
           heading="Building intelligent systems from models to applications."
         />
-        <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="mt-8 grid grid-cols-1 items-stretch gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {Object.entries(skills).map(([category, items], i) => (
             <Reveal key={category} delay={i * 0.05}>
-              <div className="rounded-lg border border-border bg-card p-5">
+              <div className="h-full rounded-lg border border-border bg-card p-5">
                 <h3 className="font-display text-base">{category}</h3>
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {items.map((item) => (
@@ -166,11 +166,33 @@ export default async function Home() {
           heading="Exploring the systems behind capital, markets and financial decisions."
           description="Alongside Data Science and AI/ML, I'm building a foundation in finance through my academic minor and independent exploration of financial markets, institutions, accounting, corporate finance, investment management, and FinTech."
         />
-        <div className="mt-8 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          {financeAreas.map((area, i) => (
-            <Reveal key={area.title} delay={i * 0.05}>
-              <FinanceCard title={area.title} description={area.description} />
-            </Reveal>
+        <div className="mt-8 grid grid-cols-1 items-stretch gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 3 }, (_, column) => (
+            <div key={column} className="contents lg:grid lg:h-full lg:grid-rows-2 lg:gap-5">
+              {financeAreas
+                .filter((_, index) => index % 3 === column)
+                .map((area, row) => {
+                  const itemIndex = row * 3 + column;
+                  const mobileOrder = [
+                    "order-1",
+                    "order-2",
+                    "order-3",
+                    "order-4",
+                    "order-5",
+                    "order-6",
+                  ][itemIndex];
+
+                  return (
+                    <Reveal
+                      key={area.title}
+                      delay={itemIndex * 0.05}
+                      className={`${mobileOrder} lg:order-none`}
+                    >
+                      <FinanceCard title={area.title} description={area.description} />
+                    </Reveal>
+                  );
+                })}
+            </div>
           ))}
         </div>
       </section>

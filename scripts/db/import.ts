@@ -509,6 +509,24 @@ export async function runImport(
 
   const report = emptyReport(scope, false, inScope.map((p) => p.slug));
 
+  // One transaction for the whole import, so a failure part-way leaves the
+  // database exactly as it was. That is the reason for the generous timeout
+  // rather than an argument against it: splitting the import into smaller
+  // transactions to fit inside five seconds would trade atomicity — the one
+  // property that makes a re-runnable import safe — for a number.
+  //
+  // The work is dominated by round-trip latency, not by server-side cost: the
+  // import issues several hundred sequential statements (a technology upsert
+  // per name, a row plus its children per project, then relationships and the
+  // profile). Against a local PostgreSQL that finishes in a few seconds;
+  // against a hosted, pooled database each round trip carries network latency
+  // and the same work takes many times longer. Prisma's 5000 ms default was
+  // written for ordinary request-path transactions and is simply the wrong
+  // scale for a bulk maintenance command an operator runs deliberately.
+  //
+  // `maxWait` is deliberately left at its default: it governs acquiring a
+  // connection from the pool, which is not what expired here, and a failure
+  // there reports itself differently ("Unable to start a transaction").
   await prisma.$transaction(async (tx) => {
     // 1. Drop projects that no longer exist in the source. Only ever on a full
     //    import — during a pilot run the other 12 are legitimately absent.
@@ -606,7 +624,7 @@ export async function runImport(
         bump(report.deletions, "technologies", r.count);
       }
     }
-  });
+  }, { timeout: 60000 });
 
   return report;
 }
